@@ -1,0 +1,15 @@
+[project]
+name = "akai-303"
+version = "1.0.0"
+description = "TB-303 emulation XPM keygroup program generator for Akai MPC"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=7.0"]
+
+[project.scripts]
+akai-303 = "src.main:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
