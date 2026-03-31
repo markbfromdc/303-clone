@@ -68,6 +68,16 @@ class TestSawtooth:
         path = generate_sawtooth(tmp_output / "TB303_Saw.WAV")
         assert path.suffix == ".WAV"
 
+    def test_sawtooth_exact_endpoint_values(self, tmp_output: Path) -> None:
+        """Sawtooth endpoints should be exactly -32767 and +32767."""
+        tmp_output.mkdir(parents=True)
+        path = generate_sawtooth(tmp_output / "test.WAV")
+        with wave.open(str(path), "rb") as wf:
+            raw = wf.readframes(wf.getnframes())
+        samples = list(struct.unpack(f"<{169}h", raw))
+        assert samples[0] == -32767
+        assert samples[-1] == 32767
+
 
 class TestSquare:
     def test_generates_valid_wav(self, tmp_output: Path) -> None:
@@ -105,6 +115,108 @@ class TestSquare:
         path = generate_square(tmp_output / "test.WAV")
         with wave.open(str(path), "rb") as wf:
             assert wf.getnframes() == 169
+
+    def test_square_exact_plateau_values(self, tmp_output: Path) -> None:
+        """Square wave plateau samples should be exactly int(0.95 * 32767)."""
+        tmp_output.mkdir(parents=True)
+        path = generate_square(tmp_output / "test.WAV")
+        with wave.open(str(path), "rb") as wf:
+            raw = wf.readframes(wf.getnframes())
+        samples = list(struct.unpack(f"<{169}h", raw))
+        expected_peak = int(0.95 * 32767)  # 31128
+        assert samples[0] == expected_peak
+        assert samples[-1] == -expected_peak
+
+
+class TestSquareTaper:
+    """Regression tests for the cosine taper at square wave transitions.
+
+    The taper smooths the +amplitude → -amplitude transition to reduce
+    aliasing. Previously used cos(π/2)≈0 which produced zero samples
+    instead of smooth interpolation. Fixed to cos(π/4)≈0.7071.
+    """
+
+    def test_taper_samples_nonzero(self, tmp_output: Path) -> None:
+        """Transition taper samples should NOT be zero."""
+        tmp_output.mkdir(parents=True)
+        path = generate_square(tmp_output / "test.WAV")
+        with wave.open(str(path), "rb") as wf:
+            raw = wf.readframes(wf.getnframes())
+        samples = list(struct.unpack(f"<{169}h", raw))
+        # transition_point = int(169 * 0.5) = 84
+        assert samples[83] > 0, f"Taper at index 83 was {samples[83]}, expected positive nonzero"
+        assert samples[84] < 0, f"Taper at index 84 was {samples[84]}, expected negative nonzero"
+
+    def test_taper_values_between_zero_and_peak(self, tmp_output: Path) -> None:
+        """Taper samples should be between zero and peak amplitude."""
+        tmp_output.mkdir(parents=True)
+        path = generate_square(tmp_output / "test.WAV")
+        with wave.open(str(path), "rb") as wf:
+            raw = wf.readframes(wf.getnframes())
+        samples = list(struct.unpack(f"<{169}h", raw))
+        peak = int(0.95 * 32767)
+        assert 0 < samples[83] < peak
+        assert -peak < samples[84] < 0
+
+    def test_taper_symmetry(self, tmp_output: Path) -> None:
+        """Positive and negative taper samples should be equal in magnitude."""
+        tmp_output.mkdir(parents=True)
+        path = generate_square(tmp_output / "test.WAV")
+        with wave.open(str(path), "rb") as wf:
+            raw = wf.readframes(wf.getnframes())
+        samples = list(struct.unpack(f"<{169}h", raw))
+        assert samples[83] == -samples[84]
+
+
+class TestSquareDutyCycle:
+    def test_duty_75_percent(self, tmp_output: Path) -> None:
+        """75% duty cycle should have more positive than negative samples."""
+        tmp_output.mkdir(parents=True)
+        path = generate_square(tmp_output / "test.WAV", duty=0.75)
+        with wave.open(str(path), "rb") as wf:
+            raw = wf.readframes(wf.getnframes())
+        n = wf.getnframes()
+        samples = list(struct.unpack(f"<{n}h", raw))
+        positive = sum(1 for s in samples if s > 0)
+        negative = sum(1 for s in samples if s < 0)
+        assert positive > negative
+
+    def test_duty_25_percent(self, tmp_output: Path) -> None:
+        """25% duty cycle should have fewer positive than negative samples."""
+        tmp_output.mkdir(parents=True)
+        path = generate_square(tmp_output / "test.WAV", duty=0.25)
+        with wave.open(str(path), "rb") as wf:
+            raw = wf.readframes(wf.getnframes())
+        n = wf.getnframes()
+        samples = list(struct.unpack(f"<{n}h", raw))
+        positive = sum(1 for s in samples if s > 0)
+        negative = sum(1 for s in samples if s < 0)
+        assert positive < negative
+
+
+class TestCustomParameters:
+    def test_custom_sample_rate(self, tmp_output: Path) -> None:
+        """Sawtooth at 48000 Hz should produce correct cycle length."""
+        tmp_output.mkdir(parents=True)
+        path = generate_sawtooth(tmp_output / "test.WAV", sample_rate=48000)
+        with wave.open(str(path), "rb") as wf:
+            assert wf.getframerate() == 48000
+            expected_len = round(48000 / 261.63)
+            assert wf.getnframes() == expected_len
+
+    def test_custom_root_freq(self, tmp_output: Path) -> None:
+        """Sawtooth at A4 (440 Hz) should produce 100 samples."""
+        tmp_output.mkdir(parents=True)
+        path = generate_sawtooth(tmp_output / "test.WAV", root_freq=440.0)
+        with wave.open(str(path), "rb") as wf:
+            assert wf.getnframes() == 100
+
+    def test_square_custom_sample_rate(self, tmp_output: Path) -> None:
+        """Square at 48000 Hz should have correct frame rate."""
+        tmp_output.mkdir(parents=True)
+        path = generate_square(tmp_output / "test.WAV", sample_rate=48000)
+        with wave.open(str(path), "rb") as wf:
+            assert wf.getframerate() == 48000
 
 
 class TestGenerateAll:

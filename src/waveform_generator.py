@@ -103,10 +103,10 @@ def generate_square(
     for i in range(cycle_len):
         if i == transition_point - 1:
             # Cosine taper at positive-to-negative transition
-            value = amplitude * math.cos(math.pi / 2)
+            value = amplitude * math.cos(math.pi / 4)
         elif i == transition_point:
             # Cosine taper at negative start
-            value = -amplitude * math.cos(math.pi / 2)
+            value = -amplitude * math.cos(math.pi / 4)
         elif i < transition_point:
             value = amplitude
         else:

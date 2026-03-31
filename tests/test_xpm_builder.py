@@ -341,6 +341,49 @@ class TestInsertsEnabled:
         assert ar.find("AudioRoute") is not None
 
 
+class TestXpmParamBounds:
+    def test_cutoff_at_zero(self) -> None:
+        """Cutoff of 0.0 should produce valid XPM."""
+        params = TB303Params(cutoff=0.0)
+        root = build_xpm(params)
+        instrument = root.find("Program/Instruments/Instrument")
+        assert float(instrument.find("Cutoff").text) == pytest.approx(0.0)
+
+    def test_cutoff_at_one(self) -> None:
+        """Cutoff of 1.0 should produce valid XPM."""
+        params = TB303Params(cutoff=1.0)
+        root = build_xpm(params)
+        instrument = root.find("Program/Instruments/Instrument")
+        assert float(instrument.find("Cutoff").text) == pytest.approx(1.0)
+
+    def test_resonance_at_zero(self) -> None:
+        """Resonance of 0.0 should produce valid XPM."""
+        params = TB303Params(resonance=0.0)
+        root = build_xpm(params)
+        instrument = root.find("Program/Instruments/Instrument")
+        assert float(instrument.find("Resonance").text) == pytest.approx(0.0)
+
+    def test_resonance_at_one(self) -> None:
+        """Resonance of 1.0 should produce valid XPM."""
+        params = TB303Params(resonance=1.0)
+        root = build_xpm(params)
+        instrument = root.find("Program/Instruments/Instrument")
+        assert float(instrument.find("Resonance").text) == pytest.approx(1.0)
+
+    def test_all_params_at_zero_boundary(self) -> None:
+        """All float params at 0.0 should produce valid parseable XPM."""
+        params = TB303Params(
+            cutoff=0.0, resonance=0.0, filter_env_amt=0.0,
+            velocity_to_filter=0.0, filter_attack=0.0,
+            filter_decay=0.0, filter_sustain=0.0, filter_release=0.0,
+            volume_attack=0.0, volume_decay=0.0, volume_sustain=0.0,
+            volume_release=0.0, velocity_sensitivity=0.0,
+        )
+        root = build_xpm(params)
+        assert root.tag == "MPCVObject"
+        assert root.find("Program/Instruments/Instrument") is not None
+
+
 class TestWriteXpm:
     def test_writes_valid_xml(self, tmp_path: Path) -> None:
         """Written XPM should be parseable XML."""
