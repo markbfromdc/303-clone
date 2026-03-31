@@ -34,6 +34,14 @@ def main() -> None:
     parser.add_argument("--resonance", type=float, help="Filter resonance 0.0-1.0")
     parser.add_argument("--filter-env", type=float, help="Filter envelope amount 0.0-1.0")
     parser.add_argument("--filter-decay", type=float, help="Filter decay 0.0-1.0")
+    parser.add_argument(
+        "--no-mono", action="store_true",
+        help="Disable mono mode (default: mono enabled for 303 behavior)",
+    )
+    parser.add_argument(
+        "--accent-sensitivity", type=float,
+        help="Velocity-to-filter sensitivity 0.0-1.0 (accent depth)",
+    )
 
     args = parser.parse_args()
 
@@ -57,14 +65,28 @@ def main() -> None:
         params.filter_env_amt = args.filter_env
     if args.filter_decay is not None:
         params.filter_decay = args.filter_decay
+    if args.no_mono:
+        params.mono = False
+        params.program_polyphony = 4
+    if args.accent_sensitivity is not None:
+        params.velocity_to_filter = args.accent_sensitivity
 
     xpm_root = build_xpm(params)
     xpm_path = write_xpm(xpm_root, programs_dir / "TB-303.xpm")
     print(f"  Generated: {xpm_path} ({xpm_path.stat().st_size} bytes)")
 
     print(f"\nTB-303 preset generated in: {base_dir}")
+    print(f"  Voice: {'Mono' if params.mono else 'Poly'}")
     print(f"  Filter: type={params.filter_type} cutoff={params.cutoff} "
           f"resonance={params.resonance} env_amt={params.filter_env_amt}")
+    print(f"  Accent: vel→filter={params.velocity_to_filter} "
+          f"vel→amp={params.velocity_sensitivity} "
+          f"vel→env={params.velocity_to_filter_env}")
+    print(f"  Curves: filter_decay={params.filter_decay_curve} (convex/exponential)")
+    print(f"\n  Post-load setup on MPC:")
+    print(f"    1. Portamento: Program Edit > PORTA/MOD > Time=30, Legato=On")
+    print(f"    2. Insert FX:  Channel Mixer > Inserts > AIR Tube Drive")
+    print(f"       Drive=30%, Tone=50%, Mix=100%")
 
 
 if __name__ == "__main__":

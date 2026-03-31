@@ -15,6 +15,9 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# Sentinel value for unassigned Q-Link parameters in MPC XPM format
+QLINK_UNASSIGNED: int = 2147483647
+
 
 def normalize_env_time(seconds: float, min_s: float = 0.001, max_s: float = 100.0) -> float:
     """Convert a time in seconds to MPC normalized 0.0-1.0 value.
@@ -45,25 +48,38 @@ class TB303Params:
     """
 
     # --- Filter (VCF) ---
-    # TB-303: 4-pole diode ladder, effectively ~18dB/oct
-    # MPC: Filter type 3 = Low Pass 4-pole (24dB/oct), closest match
+    # TB-303: 4-pole diode ladder, effectively ~18dB/oct due to mismatched
+    # capacitor (pole 1: 0.18µF vs poles 2-4: 0.33µF). MPC has no 18dB mode.
+    # Filter type 3 = Low Pass 4-pole (24dB/oct), closest available match.
+    # We compensate for the steeper slope by reducing resonance slightly and
+    # relying on the AIR Tube Drive insert for saturation character.
     filter_type: int = 3
 
     # TB-303: Cutoff range ~210Hz-2.5kHz, midpoint ~500Hz
     cutoff: float = 0.250000
 
-    # TB-303: Moderate resonance, does NOT self-oscillate
-    resonance: float = 0.450000
+    # TB-303: Does NOT self-oscillate — high resonance produces saturation/
+    # overdrive instead. Reduced from 0.45 to compensate for 24dB/oct being
+    # steeper than the 303's effective ~18dB/oct. Combined with AIR Tube Drive
+    # insert, this avoids digital harshness while preserving squelch.
+    resonance: float = 0.400000
 
-    # TB-303: Heavy positive envelope-to-filter modulation (core "squelch")
-    filter_env_amt: float = 0.650000
+    # TB-303: Heavy positive envelope-to-filter modulation is the core of
+    # the "squelch" sound. Increased from 0.65 for stronger character.
+    filter_env_amt: float = 0.700000
 
-    # TB-303: Accent maps velocity to filter cutoff
-    velocity_to_filter: float = 0.300000
+    # TB-303: Accent maps velocity to filter cutoff. Increased from 0.30
+    # for more prominent accent filter sweep.
+    velocity_to_filter: float = 0.400000
+
+    # TB-303: Zero filter keyboard tracking on stock unit. The filter cutoff
+    # does not follow pitch — lower notes sound darker, higher notes brighter.
+    filter_keytrack: float = 0.000000
 
     # --- Filter Envelope (MEG) ---
-    # TB-303: ~3ms attack (fast snap)
-    filter_attack: float = 0.012000
+    # TB-303: ~3ms attack. normalize_env_time(0.003) = 0.095.
+    # Previously 0.012 which mapped to ~1.1ms — too fast.
+    filter_attack: float = 0.095000
 
     filter_hold: float = 0.000000
 
@@ -76,13 +92,21 @@ class TB303Params:
     # TB-303: ~200ms release (matches accent decay)
     filter_release: float = 0.460000
 
+    # --- Filter Envelope Curves ---
+    # TB-303 uses RC circuit envelopes with exponential decay character.
+    # Values > 0.5 = convex curve (fast initial decay, slow tail).
+    filter_attack_curve: float = 0.500000   # Linear attack (snap)
+    filter_decay_curve: float = 0.700000    # Convex — key 303 exponential decay
+    filter_release_curve: float = 0.700000  # Convex release
+
     # --- Volume Envelope (VEG) ---
     # TB-303: Instant VCA attack
     volume_attack: float = 0.000000
 
     volume_hold: float = 0.000000
 
-    # TB-303: Fixed ~3.5 second VCA decay (long gate)
+    # TB-303: Fixed ~3.5 second VCA decay (long gate). This creates the
+    # characteristic "pluck from filter, sustain from VCA" behavior.
     volume_decay: float = 0.720000
 
     # TB-303: Held level during gate
@@ -90,6 +114,11 @@ class TB303Params:
 
     # TB-303: ~200ms release, quick close
     volume_release: float = 0.460000
+
+    # --- Volume Envelope Curves ---
+    volume_attack_curve: float = 0.500000   # Linear
+    volume_decay_curve: float = 0.600000    # Slightly convex VCA
+    volume_release_curve: float = 0.500000  # Linear
 
     # --- Pitch Envelope ---
     # TB-303: No dedicated pitch envelope; set neutral
@@ -99,6 +128,36 @@ class TB303Params:
     pitch_sustain: float = 0.500000
     pitch_release: float = 0.000000
     pitch_env_amount: float = 0.500000
+
+    # --- Velocity / Accent Routing ---
+    # TB-303 accent is binary (on/off) but maps naturally to MIDI velocity.
+    # Accented notes: brighter (filter sweep) + louder (VCA boost) + deeper
+    # envelope sweep simultaneously.
+    velocity_sensitivity: float = 0.600000      # Velocity → amplitude (accent VCA boost)
+    velocity_to_filter_env: float = 0.250000    # Velocity → filter env depth
+    aftertouch_to_filter: float = 0.000000      # Not used on 303
+    velocity_to_start: float = 0.000000
+    velocity_to_filter_attack: float = 0.000000
+    velocity_to_pitch: float = 0.000000
+    velocity_to_volume_attack: float = 0.000000
+    velocity_to_pan: float = 0.000000
+
+    # --- LFO ---
+    # Off by default. Available for user to enable via Q-Link for slow
+    # filter sweeps or vibrato effects.
+    lfo_type: str = "Sine"
+    lfo_rate: float = 0.100000
+    lfo_sync: int = 0
+    lfo_reset: bool = False
+    lfo_pitch: float = 0.000000
+    lfo_cutoff: float = 0.000000
+    lfo_volume: float = 0.000000
+    lfo_pan: float = 0.000000
+
+    # --- Voice Mode ---
+    # TB-303 is monophonic with 60ms constant-time portamento (slide).
+    mono: bool = True
+    program_polyphony: int = 1
 
     # --- Layer ---
     # Root note C3 (MIDI 60, 261.63 Hz)
@@ -115,12 +174,37 @@ class TB303Params:
 
     # --- Program-level ---
     program_name: str = "TB-303"
+    program_volume: float = 0.707946   # ~-3dB
+    inserts_enabled: bool = True        # Enable insert bus for AIR FX
 
     # Sawtooth WAV filename (MPC requires .WAV uppercase)
     saw_filename: str = "TB303_Saw.WAV"
 
     # Square WAV filename
     square_filename: str = "TB303_Square.WAV"
+
+    # --- Q-Link Assignments ---
+    # 16 entries of (parameter_id, momentary). MIDI CC mappings:
+    # 94=Brightness/Cutoff, 71=Resonance, 7=Volume, 10=Pan.
+    # QLINK_UNASSIGNED = unassigned (user can bind via Q-Link Learn on device).
+    qlink_assignments: list[tuple[int, int]] = field(default_factory=lambda: [
+        (94, 0),                # Q1: Cutoff
+        (71, 0),                # Q2: Resonance
+        (QLINK_UNASSIGNED, 0),  # Q3: unassigned (use Q-Link Learn for Filter Env Amt)
+        (QLINK_UNASSIGNED, 0),  # Q4: unassigned (use Q-Link Learn for Filter Decay)
+        (7, 0),                 # Q5: Volume
+        (10, 0),                # Q6: Pan
+        (QLINK_UNASSIGNED, 0),  # Q7-Q16: unassigned
+        (QLINK_UNASSIGNED, 0),
+        (QLINK_UNASSIGNED, 0),
+        (QLINK_UNASSIGNED, 0),
+        (QLINK_UNASSIGNED, 0),
+        (QLINK_UNASSIGNED, 0),
+        (QLINK_UNASSIGNED, 0),
+        (QLINK_UNASSIGNED, 0),
+        (QLINK_UNASSIGNED, 0),
+        (QLINK_UNASSIGNED, 0),
+    ])
 
 
 def _add_text_element(parent: ET.Element, tag: str, text: str) -> ET.Element:
@@ -130,6 +214,11 @@ def _add_text_element(parent: ET.Element, tag: str, text: str) -> ET.Element:
     return elem
 
 
+def _add_float(parent: ET.Element, tag: str, value: float) -> ET.Element:
+    """Add a child element with a formatted float value."""
+    return _add_text_element(parent, tag, f"{value:.6f}")
+
+
 def _add_version(root: ET.Element) -> None:
     """Add the Version block to the XPM root."""
     version = ET.SubElement(root, "Version")
@@ -137,6 +226,39 @@ def _add_version(root: ET.Element) -> None:
     _add_text_element(version, "Application", "MPC")
     _add_text_element(version, "Application_Version", "3.7.1")
     _add_text_element(version, "Platform", "MPC")
+
+
+def _build_program_header(program: ET.Element, params: TB303Params) -> None:
+    """Add program-level settings between ProgramName and Instruments.
+
+    Configures audio routing, insert effects bus, volume, pan,
+    and monophonic voice mode for TB-303 emulation.
+    """
+    # Audio routing with insert effects bus enabled
+    audio_route = ET.SubElement(program, "AudioRoute")
+    _add_text_element(audio_route, "AudioRoute", "2")
+    _add_text_element(audio_route, "AudioRouteSubIndex", "0")
+    _add_text_element(audio_route, "AudioRouteChannelBitmap", "3")
+    _add_text_element(audio_route, "InsertsEnabled", str(params.inserts_enabled))
+
+    # Send levels (all off — user can route to FX sends on device)
+    for i in range(1, 5):
+        _add_float(program, f"Send{i}", 0.0)
+
+    # Program master volume and pan
+    _add_float(program, "Volume", params.program_volume)
+    _add_text_element(program, "Mute", "False")
+    _add_text_element(program, "Solo", "False")
+    _add_float(program, "Pan", 0.500000)
+    _add_text_element(program, "AutomationFilter", "1")
+    _add_float(program, "Pitch", 0.0)
+    _add_text_element(program, "TuneCoarse", "0")
+    _add_text_element(program, "TuneFine", "0")
+
+    # TB-303 is monophonic — set at program level (not keygroup level)
+    # to avoid envelope retrigger issues per MPC forum guidance
+    _add_text_element(program, "Mono", str(params.mono))
+    _add_text_element(program, "Program_Polyphony", str(params.program_polyphony))
 
 
 def _build_layer(
@@ -161,11 +283,11 @@ def _build_layer(
     layer = ET.SubElement(parent, "Layer")
 
     _add_text_element(layer, "Active", str(active))
-    _add_text_element(layer, "Volume", f"{params.layer_volume:.6f}")
-    _add_text_element(layer, "Pan", f"{params.layer_pan:.6f}")
-    _add_text_element(layer, "Pitch", "0.000000")
-    _add_text_element(layer, "TuneCoarse", "0.000000")
-    _add_text_element(layer, "TuneFine", "0.000000")
+    _add_float(layer, "Volume", params.layer_volume)
+    _add_float(layer, "Pan", params.layer_pan)
+    _add_float(layer, "Pitch", 0.0)
+    _add_float(layer, "TuneCoarse", 0.0)
+    _add_float(layer, "TuneFine", 0.0)
     _add_text_element(layer, "RootNote", str(params.root_note))
     _add_text_element(layer, "KeyTrack", "1")
     _add_text_element(layer, "VelStart", "0")
@@ -190,11 +312,11 @@ def _build_empty_layer(parent: ET.Element) -> ET.Element:
     """Build an empty/unused Layer element."""
     layer = ET.SubElement(parent, "Layer")
     _add_text_element(layer, "Active", "0")
-    _add_text_element(layer, "Volume", "0.000000")
-    _add_text_element(layer, "Pan", "0.500000")
-    _add_text_element(layer, "Pitch", "0.000000")
-    _add_text_element(layer, "TuneCoarse", "0.000000")
-    _add_text_element(layer, "TuneFine", "0.000000")
+    _add_float(layer, "Volume", 0.0)
+    _add_float(layer, "Pan", 0.500000)
+    _add_float(layer, "Pitch", 0.0)
+    _add_float(layer, "TuneCoarse", 0.0)
+    _add_float(layer, "TuneFine", 0.0)
     _add_text_element(layer, "RootNote", "60")
     _add_text_element(layer, "KeyTrack", "1")
     _add_text_element(layer, "VelStart", "0")
@@ -213,13 +335,30 @@ def _build_empty_layer(parent: ET.Element) -> ET.Element:
     return layer
 
 
+def _build_lfo(parent: ET.Element, params: TB303Params) -> ET.Element:
+    """Build LFO configuration element.
+
+    LFO is off by default (all depth values 0.0) but available for
+    the user to enable via Q-Link for slow filter sweeps.
+    """
+    lfo = ET.SubElement(parent, "LFO")
+    _add_text_element(lfo, "Type", params.lfo_type)
+    _add_float(lfo, "Rate", params.lfo_rate)
+    _add_text_element(lfo, "Sync", str(params.lfo_sync))
+    _add_text_element(lfo, "Reset", str(params.lfo_reset))
+    return lfo
+
+
 def _build_instrument(parent: ET.Element, params: TB303Params) -> ET.Element:
     """Build an Instrument (keygroup) element with TB-303 parameters.
 
     Single keygroup spanning full MIDI range (0-127) with:
-    - Layer 1: Sawtooth (active) — TB-303 primary waveform
-    - Layer 2: Square (muted) — TB-303 alternate waveform, user-switchable
+    - Layer 1: Sawtooth (active) -- TB-303 primary waveform
+    - Layer 2: Square (muted) -- TB-303 alternate waveform, user-switchable
     - Layers 3-4: Empty
+
+    Includes filter with zero keytrack, exponential envelope curves,
+    velocity-to-accent routing, and LFO section.
     """
     instrument = ET.SubElement(parent, "Instrument")
 
@@ -232,33 +371,73 @@ def _build_instrument(parent: ET.Element, params: TB303Params) -> ET.Element:
     _add_text_element(instrument, "OneShot", "0")
 
     # --- Filter: TB-303 4-pole diode ladder approximation ---
+    # The 303's diode ladder is effectively ~18dB/oct due to mismatched C18.
+    # MPC's Low 4 (24dB/oct) is the closest option. We compensate by:
+    # 1. Reducing resonance (0.40 vs typical 0.45+) to avoid harsh digital peak
+    # 2. Using convex envelope decay curves for exponential RC character
+    # 3. Recommending AIR Tube Drive insert for saturation (see post-load setup)
     _add_text_element(instrument, "FilterType", str(params.filter_type))
-    _add_text_element(instrument, "Cutoff", f"{params.cutoff:.6f}")
-    _add_text_element(instrument, "Resonance", f"{params.resonance:.6f}")
-    _add_text_element(instrument, "FilterEnvAmt", f"{params.filter_env_amt:.6f}")
-    _add_text_element(instrument, "VelocityToFilter", f"{params.velocity_to_filter:.6f}")
+    _add_float(instrument, "Cutoff", params.cutoff)
+    _add_float(instrument, "Resonance", params.resonance)
+    _add_float(instrument, "FilterEnvAmt", params.filter_env_amt)
+    # TB-303: No filter keyboard tracking — cutoff is fixed regardless of pitch
+    _add_float(instrument, "FilterKeytrack", params.filter_keytrack)
+    # Velocity → filter cutoff (accent brightening)
+    _add_float(instrument, "VelocityToFilter", params.velocity_to_filter)
+    # Velocity → filter envelope depth (accented notes get deeper sweep)
+    _add_float(instrument, "VelocityToFilterEnvelope", params.velocity_to_filter_env)
 
-    # --- Filter Envelope: Fast attack, variable decay, no sustain ---
-    _add_text_element(instrument, "FilterAttack", f"{params.filter_attack:.6f}")
-    _add_text_element(instrument, "FilterHold", f"{params.filter_hold:.6f}")
-    _add_text_element(instrument, "FilterDecay", f"{params.filter_decay:.6f}")
-    _add_text_element(instrument, "FilterSustain", f"{params.filter_sustain:.6f}")
-    _add_text_element(instrument, "FilterRelease", f"{params.filter_release:.6f}")
+    # --- Filter Envelope: Fast attack, exponential decay, no sustain ---
+    _add_float(instrument, "FilterAttack", params.filter_attack)
+    _add_float(instrument, "FilterHold", params.filter_hold)
+    _add_float(instrument, "FilterDecay", params.filter_decay)
+    _add_float(instrument, "FilterSustain", params.filter_sustain)
+    _add_float(instrument, "FilterRelease", params.filter_release)
+    # Envelope curve shapes — convex (>0.5) for exponential RC decay character
+    _add_float(instrument, "FilterAttackCurve", params.filter_attack_curve)
+    _add_float(instrument, "FilterDecayCurve", params.filter_decay_curve)
+    _add_float(instrument, "FilterReleaseCurve", params.filter_release_curve)
 
     # --- Volume Envelope: Instant attack, long decay (TB-303 VEG) ---
-    _add_text_element(instrument, "VolumeAttack", f"{params.volume_attack:.6f}")
-    _add_text_element(instrument, "VolumeHold", f"{params.volume_hold:.6f}")
-    _add_text_element(instrument, "VolumeDecay", f"{params.volume_decay:.6f}")
-    _add_text_element(instrument, "VolumeSustain", f"{params.volume_sustain:.6f}")
-    _add_text_element(instrument, "VolumeRelease", f"{params.volume_release:.6f}")
+    # The VEG's ~3.5s decay means notes sustain long at VCA level while
+    # the filter envelope creates the perceived "pluck" — timbral envelope
+    # is fast and snappy while amplitude envelope is slow and gentle.
+    _add_float(instrument, "VolumeAttack", params.volume_attack)
+    _add_float(instrument, "VolumeHold", params.volume_hold)
+    _add_float(instrument, "VolumeDecay", params.volume_decay)
+    _add_float(instrument, "VolumeSustain", params.volume_sustain)
+    _add_float(instrument, "VolumeRelease", params.volume_release)
+    _add_float(instrument, "VolumeAttackCurve", params.volume_attack_curve)
+    _add_float(instrument, "VolumeDecayCurve", params.volume_decay_curve)
+    _add_float(instrument, "VolumeReleaseCurve", params.volume_release_curve)
 
     # --- Pitch Envelope: Neutral (no pitch modulation on stock 303) ---
-    _add_text_element(instrument, "PitchAttack", f"{params.pitch_attack:.6f}")
-    _add_text_element(instrument, "PitchHold", f"{params.pitch_hold:.6f}")
-    _add_text_element(instrument, "PitchDecay", f"{params.pitch_decay:.6f}")
-    _add_text_element(instrument, "PitchSustain", f"{params.pitch_sustain:.6f}")
-    _add_text_element(instrument, "PitchRelease", f"{params.pitch_release:.6f}")
-    _add_text_element(instrument, "PitchEnvAmount", f"{params.pitch_env_amount:.6f}")
+    _add_float(instrument, "PitchAttack", params.pitch_attack)
+    _add_float(instrument, "PitchHold", params.pitch_hold)
+    _add_float(instrument, "PitchDecay", params.pitch_decay)
+    _add_float(instrument, "PitchSustain", params.pitch_sustain)
+    _add_float(instrument, "PitchRelease", params.pitch_release)
+    _add_float(instrument, "PitchEnvAmount", params.pitch_env_amount)
+
+    # --- Velocity / Accent Routing ---
+    # TB-303 accent simultaneously: boosts VCA, sweeps filter, deepens envelope.
+    # We map MIDI velocity to approximate this multi-path accent behavior.
+    _add_float(instrument, "VelocitySensitivity", params.velocity_sensitivity)
+    _add_float(instrument, "VelocityToStart", params.velocity_to_start)
+    _add_float(instrument, "VelocityToFilterAttack", params.velocity_to_filter_attack)
+    _add_float(instrument, "VelocityToPitch", params.velocity_to_pitch)
+    _add_float(instrument, "VelocityToVolumeAttack", params.velocity_to_volume_attack)
+    _add_float(instrument, "VelocityToPan", params.velocity_to_pan)
+    _add_float(instrument, "AfterTouchToFilter", params.aftertouch_to_filter)
+
+    # --- LFO ---
+    # Depth controls (all off by default)
+    _add_float(instrument, "LfoPitch", params.lfo_pitch)
+    _add_float(instrument, "LfoCutoff", params.lfo_cutoff)
+    _add_float(instrument, "LfoVolume", params.lfo_volume)
+    _add_float(instrument, "LfoPan", params.lfo_pan)
+    # LFO configuration
+    _build_lfo(instrument, params)
 
     # --- Layers ---
     layers = ET.SubElement(instrument, "Layers")
@@ -280,8 +459,43 @@ def _build_instrument(parent: ET.Element, params: TB303Params) -> ET.Element:
     return instrument
 
 
+def _build_qlink_assignments(parent: ET.Element, params: TB303Params) -> ET.Element:
+    """Build Q-Link assignment configuration for real-time performance control.
+
+    Q-Links 1-2: Cutoff and Resonance (core 303 controls)
+    Q-Links 5-6: Volume and Pan
+    Remaining: Unassigned (user can bind via Q-Link Learn on device for
+    Filter Env Amount, Filter Decay, Accent Depth, etc.)
+    """
+    qlinks = ET.SubElement(parent, "QLinkAssignments")
+    program_mode = ET.SubElement(qlinks, "ProgramMode")
+    for i, (param_id, momentary) in enumerate(params.qlink_assignments, start=1):
+        qlink = ET.SubElement(program_mode, "QLink")
+        qlink.set("index", str(i))
+        _add_text_element(qlink, "Parameter", str(param_id))
+        _add_text_element(qlink, "Momentary", str(momentary))
+    return qlinks
+
+
+def _build_pad_group_map(parent: ET.Element) -> ET.Element:
+    """Build the PadGroupMap section (128 entries, all Group 0)."""
+    pad_group_map = ET.SubElement(parent, "PadGroupMap")
+    for _ in range(128):
+        pad_group = ET.SubElement(pad_group_map, "PadGroup")
+        _add_text_element(pad_group, "Group", "0")
+    return pad_group_map
+
+
 def build_xpm(params: TB303Params | None = None) -> ET.Element:
     """Build the complete XPM XML tree for a TB-303 emulation program.
+
+    Generates a fully configured MPC keygroup program with:
+    - Monophonic voice mode
+    - 4-pole LP filter with zero keytrack and exponential envelope curves
+    - Multi-path velocity/accent routing (filter cutoff + VCA + envelope depth)
+    - LFO section (off by default)
+    - Q-Link performance mappings
+    - Insert effects bus enabled for post-load AIR FX configuration
 
     Args:
         params: TB303 parameter values. Uses defaults if None.
@@ -302,6 +516,9 @@ def build_xpm(params: TB303Params | None = None) -> ET.Element:
     program.set("type", "Keygroup")
     _add_text_element(program, "ProgramName", params.program_name)
 
+    # Program-level header (audio routing, mono mode, volume)
+    _build_program_header(program, params)
+
     # Instruments (keygroups)
     instruments = ET.SubElement(program, "Instruments")
     _build_instrument(instruments, params)
@@ -312,10 +529,18 @@ def build_xpm(params: TB303Params | None = None) -> ET.Element:
         pad_note = ET.SubElement(pad_note_map, "PadNote")
         _add_text_element(pad_note, "Note", str(note))
 
+    # Pad group map: 128 entries (all Group 0)
+    _build_pad_group_map(program)
+
     # Program-level keygroup settings
+    _add_float(program, "KeygroupMasterTranspose", 0.500000)
     _add_text_element(program, "KeygroupNumKeygroups", "1")
-    _add_text_element(program, "KeygroupPitchBendRange", "0.500000")
-    _add_text_element(program, "KeygroupWheelToLfo", "1.000000")
+    _add_float(program, "KeygroupPitchBendRange", 0.500000)
+    _add_float(program, "KeygroupWheelToLfo", 1.000000)
+    _add_float(program, "KeygroupAftertouchToFilter", 0.000000)
+
+    # Q-Link assignments for real-time performance control
+    _build_qlink_assignments(program, params)
 
     return root
 

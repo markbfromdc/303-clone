@@ -36,9 +36,14 @@ src/
 - **XPM format**: XML-based, File_Version 2.1. Reference implementations: [MPCIC](https://github.com/plule/MPCIC), [ConvertWithMoss](https://github.com/git-moss/ConvertWithMoss)
 - **Parameter normalization**: XPM uses 0.0-1.0 floats. Envelope times use logarithmic normalization: `ln(seconds / 0.001) / ln(100000)`
 - **Filter type 3** = Low Pass 4-pole (24dB/oct), closest to TB-303's diode ladder
+- **Filter attack**: `normalize_env_time(0.003) = 0.095` for the 303's 3ms filter attack
+- **Envelope curves**: FilterDecayCurve=0.70, FilterReleaseCurve=0.70 (convex/exponential for RC circuit character), VolumeDecayCurve=0.60
+- **Mono mode**: `Mono=True`, `Program_Polyphony=1` at program level for 303's single-voice behavior
+- **Q-Link assignments**: Q1=Cutoff(CC94), Q2=Resonance(CC71), Q5=Volume(CC7), Q6=Pan(CC10)
 - **WAV files** must use `.WAV` uppercase extension for MPC compatibility
 - **Single-cycle waveforms**: 169 samples at 44100Hz, root note C3 (MIDI 60, 261.63Hz)
 - **Looping**: LoopStart=0, LoopEnd=cycle_length for seamless oscillator behavior
+- **Post-load manual steps**: Portamento (Program Edit > PORTA/MOD, Time=30, Legato=On) and AIR Tube Drive insert effect (Drive=30%, Tone=50%, Mix=100%) must be configured manually on the MPC; these cannot be embedded in XPM 2.1 files
 
 ## Conventions
 

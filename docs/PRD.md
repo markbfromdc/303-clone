@@ -85,9 +85,9 @@ Reference values:
 | VCO Square | Single-cycle 44.1kHz/16-bit | Layer 2 SampleFile | TB303_Square.WAV | Muted by default (Active=0), switchable |
 | VCF Type | 4-pole diode ladder ~18dB/oct | FilterType | 3 (Low 4) | 4-pole 24dB/oct LP, closest MPC approximation |
 | VCF Cutoff | ~500Hz (midpoint) | Cutoff | 0.250000 | Normalized, mid-range starting point |
-| VCF Resonance | Moderate, no self-oscillation | Resonance | 0.450000 | Below self-oscillation threshold |
-| VCF Env Amount | Heavy positive modulation | FilterEnvAmt | 0.650000 | Core of the "squelch" sound |
-| Filter Attack | ~3ms | FilterAttack | 0.012000 | Fast snap, near-instant |
+| VCF Resonance | Moderate, no self-oscillation | Resonance | 0.400000 | Reduced to compensate for 24dB/oct being steeper than 303's ~18dB/oct |
+| VCF Env Amount | Heavy positive modulation | FilterEnvAmt | 0.700000 | Increased for stronger squelch |
+| Filter Attack | ~3ms | FilterAttack | 0.095000 | normalize_env_time(0.003) = 0.095 for 3ms |
 | Filter Hold | 0 | FilterHold | 0.000000 | No hold stage |
 | Filter Decay | ~300ms (mid-range) | FilterDecay | 0.500000 | Log-normalized, adjustable sweet spot |
 | Filter Sustain | 0 (no sustain) | FilterSustain | 0.000000 | 303 filter envelope has no sustain |
@@ -97,11 +97,42 @@ Reference values:
 | VCA Decay | ~3.5 seconds | VolumeDecay | 0.720000 | Long gate-like decay |
 | VCA Sustain | 0.7 | VolumeSustain | 0.700000 | Held level during gate |
 | VCA Release | ~200ms | VolumeRelease | 0.460000 | Quick release |
-| Accent → Filter | Velocity-mapped | VelocityToFilter | 0.300000 | Harder velocity = brighter (accent sim) |
-| Voice Mode | Monophonic | Mono | enabled | 303 is single-voice |
-| Slide/Portamento | 60ms constant-time | Portamento time | 0.060000 | Mono mode with glide |
+| Accent → Filter | Velocity-mapped | VelocityToFilter | 0.400000 | More prominent accent effect, harder velocity = brighter |
+| Voice Mode | Monophonic | Mono | True | 303 is single-voice |
+| Program Polyphony | 1 voice | Program_Polyphony | 1 | Enforces mono at program level |
+| Slide/Portamento | 60ms constant-time | _(manual setup)_ | _(see 10.5)_ | Must be set manually on MPC (XPM 2.1 portamento tags undocumented) |
+| Filter Keytrack | None (stock 303) | FilterKeytrack | 0.000000 | 303 has no filter keyboard tracking |
+| Filter Decay Curve | RC circuit (exponential) | FilterDecayCurve | 0.700000 | Convex/exponential curve for RC character |
+| Filter Release Curve | RC circuit (exponential) | FilterReleaseCurve | 0.700000 | Convex/exponential curve for RC character |
+| VCA Decay Curve | Gradual taper | VolumeDecayCurve | 0.600000 | Smooth exponential VCA decay |
+| VCA Velocity Sens | Accent boosts VCA | VelocitySensitivity | 0.600000 | VCA boost on accented (high velocity) notes |
+| Accent → Filter Env | Deeper sweep on accent | VelocityToFilterEnvelope | 0.250000 | Velocity increases filter envelope depth |
+| LFO Shape | Sine | LFO_Shape | Sine | Default sine, off by default |
+| LFO Rate | Slow | LFO_Rate | 0.100000 | Low rate, user-configurable |
+| LFO → Pitch | Off | LFO_PitchDepth | 0.000000 | All LFO depths off by default |
+| LFO → Cutoff | Off | LFO_CutoffDepth | 0.000000 | User-configurable modulation target |
+| LFO → Volume | Off | LFO_VolumeDepth | 0.000000 | User-configurable modulation target |
 
-### 6.3 Keygroup Configuration
+### 6.3 Q-Link Assignments
+
+| Q-Link | CC | Parameter |
+|---|---|---|
+| Q1 | 94 | Cutoff |
+| Q2 | 71 | Resonance |
+| Q3 | — | Unassigned |
+| Q4 | — | Unassigned |
+| Q5 | 7 | Volume |
+| Q6 | 10 | Pan |
+| Q7 | — | Unassigned |
+| Q8 | — | Unassigned |
+
+### 6.4 Program-Level Configuration
+
+- **PadGroupMap**: 128 entries, all Group 0
+- **AudioRoute**: InsertsEnabled=True (for post-load AIR FX insertion)
+- **Program header**: Volume, Pan, and audio routing configuration included
+
+### 6.5 Keygroup Configuration
 
 - **1 keygroup** spanning full MIDI range (LowNote=0, HighNote=127)
 - **Layer 1**: Sawtooth (Active=1, RootNote=60, full velocity range 0-127)
@@ -176,15 +207,43 @@ output/TB-303/
 6. **Sample References**: XPM `SampleFile` tags match actual generated WAV filenames
 7. **Filter Configuration**: FilterType=3, Cutoff/Resonance/EnvAmt set to specified values
 8. **Layer Configuration**: Layer 1 active (sawtooth), Layer 2 inactive (square), RootNote=60
-9. **Tests Pass**: All pytest tests pass with no failures
-10. **CLI Runs**: `python src/main.py --output output/` completes without errors
+9. **Mono Mode**: Program has Mono=True and Program_Polyphony=1
+10. **Envelope Curves**: FilterDecayCurve=0.70, FilterReleaseCurve=0.70, VolumeDecayCurve=0.60 present
+11. **Q-Link Assignments**: Q1 (Cutoff/CC94), Q2 (Resonance/CC71), Q5 (Volume/CC7), Q6 (Pan/CC10) mapped
+12. **Filter Keytrack**: FilterKeytrack=0.0 explicitly set
+13. **Velocity Routing**: VelocitySensitivity=0.60 and VelocityToFilterEnvelope=0.25 present
+14. **Tests Pass**: All pytest tests pass with no failures
+15. **CLI Runs**: `python src/main.py --output output/` completes without errors
+
+### 10.5 Post-Load Manual Setup
+
+The following parameters cannot be embedded in XPM 2.1 files and must be configured manually on the MPC after loading the program:
+
+#### Portamento (Slide)
+1. Navigate to **Program Edit > PORTA/MOD**
+2. Set **Portamento Time = 30**
+3. Set **Legato = On**
+4. This approximates the 303's 60ms constant-time slide between notes
+
+XPM 2.1 portamento tags are undocumented and not reliably parsed by MPC firmware.
+
+#### Insert Effects (Saturation/Overdrive)
+1. Open **Channel Mixer > Inserts** for the program's audio track
+2. Add **AIR Tube Drive** effect:
+   - Drive = 30%
+   - Tone = 50%
+   - Mix = 100%
+3. This provides the 303's characteristic saturation and overdrive at high resonance settings
+
+Insert effects cannot be embedded in XPM files; they are stored at the project/track level.
 
 ## 11. Known Limitations
 
-- **Portamento/Mono mode**: May not be fully settable via XPM tags; user may need to enable mono mode and set portamento time on MPC after loading the program
-- **Filter slope**: MPC's Low 4 is 24dB/oct vs TB-303's effective ~18dB/oct; no exact match available
+- **Portamento**: Must be set manually after loading (see Section 10.5); XPM 2.1 portamento tags are undocumented
+- **Insert effects**: AIR Tube Drive must be added manually for 303-style saturation (see Section 10.5); insert FX cannot be stored in XPM files
+- **Filter slope**: MPC's Low 4 is 24dB/oct vs TB-303's effective ~18dB/oct; resonance reduced to 0.40 to compensate but no exact match available
 - **Accent stacking**: The TB-303's capacitor-based accent accumulation across consecutive accented steps cannot be replicated via static XPM parameters; requires sequencer-level velocity programming
-- **No keyboard tracking to filter**: The TB-303 has no filter keytrack; the MPC may default to some keytrack behavior depending on filter type
+- **Filter keytrack**: Explicitly set to 0.0 to match the 303's lack of keyboard tracking
 
 ## 12. References
 
